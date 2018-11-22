@@ -55,6 +55,19 @@ const User = mongoose.model("User", {
   }]
 })
 
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  User.findById(req.params.id)
+    .then(user => {
+      if (user.accessToken === req.headers.accesstoken) {
+        req.user = user
+        next()
+      } else {
+        res.status(401).json({ loggedOut: true })
+      }
+    })
+}
+
 // User login endpoint
 app.post("/sessions", (req, res) => {
   User.findOne({ username: req.body.username }).then(user => {
@@ -70,21 +83,8 @@ app.post("/sessions", (req, res) => {
   })
 })
 
-// Authentication middleware
-const authenticateUser = (req, res, next) => {
-  User.findById(req.params.id)
-    .then(user => {
-      if (user.accessToken === req.headers.accesstoken) {
-        req.user = user
-        next()
-      } else {
-        res.status(401).json({ loggedOut: true })
-      }
-    })
-}
-
 // Use middleware for all endpoints beginning with /users/:id
-// app.use("/users/:id", authenticateUser)
+app.use("/users/:id", authenticateUser)
 
 // User sign-up endpoint
 app.post("/users", (req, res) => {
@@ -100,6 +100,17 @@ app.post("/users", (req, res) => {
   })
 })
 
+// GET user info
+app.get("/users/:id", (req, res) => {
+  const id = req.user._id
+  User.findById(id)
+  .populate("characters")
+  .then(user => {
+    const { password, accessToken, ...rest } = user.toObject()
+    res.json(rest)
+  })
+})
+
  /////////////////////////////////////////////////////////////
 
 // Character model
@@ -109,13 +120,14 @@ const Character = mongoose.model("Character", {
     ref: "User"
   },
   name: String,
-  class_level: String,
+  class: String,
+  level: Number,
   background: String,
   race: String,
   alignment: String,
   experience_points: Number,
   gold: Number,
-  spells: [Number],
+  spells: [String],
   portrait: String,
   party: {
     type: mongoose.Schema.Types.ObjectId,
@@ -127,7 +139,10 @@ const Character = mongoose.model("Character", {
 app.get("/characters", (req, res) => {
   Character
   .find()
-  .populate({path: "party", select: "name"})
+  .populate("party")
+  .populate("user")
+  .sort({ "name": 1 })
+  // .populate({path: "party", select: "name"})
   .then(characters => {
     res.json(characters)
   })
@@ -137,6 +152,8 @@ app.get("/characters", (req, res) => {
 app.get("/characters/:id", (req, res) => {
   const id = req.params.id
   Character.findById(id)
+  .populate("party")
+  .populate("user")
   .then(character => {
     res.json(character)
   })
@@ -146,21 +163,59 @@ app.get("/characters/:id", (req, res) => {
 app.post("/characters", (req, res) => {
   const jsonBody = req.body
   const character = new Character(jsonBody)
-
-  character.save().then(() => {
-    res.status(201).json({ created: true})
-  }).catch(err => {
+  const userId = jsonBody.user
+  
+  character.save()
+  .then(newCharacter => {    
+    const update = newCharacter._id
+    
+    return User
+    .findByIdAndUpdate(userId,
+      { $push: { "characters": update } },
+      { "new" : true})
+  })
+  .then(() => {
+    res.status(201).json({ created: true})})  
+  .catch(err => {
     res.status(400).json({ created: false, errorMsg: err.message })
   })
 })
 
-// Add character to team
+// ADD party to character
 app.put("/characters/:id/party", (req, res) => {
   const id = req.params.id
-  const update = req.body.party
-  Character.findByIdAndUpdate(id, { party: update }).then(() => {
-    Character.findById(id)
-  }, res.send(id))
+  const party = req.body.party
+
+  Character
+  .findByIdAndUpdate(id, 
+    { "party" : party },
+    { "new" : true}
+  )
+  .then(() => {
+    res.status(201).json({ created: true})})  
+  .catch(err => {
+    res.status(400).json({ created: false, errorMsg: err.message })
+  })
+})
+
+// ADD spells to character
+app.put("/characters/:id/spells", (req, res) => {
+  const id = req.params.id
+  const spell = req.body.spells
+  
+  console.log(id)
+  console.log(spell)
+
+  Character
+  .findByIdAndUpdate(id, 
+    { $push: { "spells" : spell } },
+    { "new" : true}
+  )
+  .then(() => {
+    res.status(201).json({ created: true})})  
+  .catch(err => {
+    res.status(400).json({ created: false, errorMsg: err.message })
+  })
 })
 
 /////////////////////////////////////////////////////////////
@@ -179,12 +234,41 @@ const Party = mongoose.model("Party", {
 
 // GET all parties
 app.get("/parties", (req, res) => {
- Party
- .find()
- .populate({path: "members", select: "name portrait"})
- .then(parties => {
-   res.json(parties)
- })
+  
+  const name = req.query.name
+  const limit = 5
+  
+  if (name !== undefined) {
+    Party
+    .find()
+    .where('name')
+    .regex(new RegExp(name, "i"))
+    .then(parties => {
+      parties = parties.slice(0, limit)
+      res.json(parties)
+    })
+  } else {
+    Party
+    .find()
+    .populate({path: "members", select: "name portrait"})
+    .then(parties => {
+      res.json(parties)
+    })
+  }
+
+})
+
+// GET one party
+app.get("/parties/:id", (req, res) => {
+  const id = req.params.id
+
+    Party
+    .findById(id)
+    .populate({path: "members", select: "name portrait"})
+    .then(parties => {
+      res.json(parties)
+    })
+
 })
 
 // POST new party
@@ -192,7 +276,8 @@ app.post("/parties", (req, res) => {
  const jsonBody = req.body
  const party = new Party(jsonBody)
 
- party.save().then(() => {
+ party.save()
+ .then(() => {
    res.status(201).json({ created: true})
  }).catch(err => {
    res.status(400).json({ created: false, errorMsg: err.message })
@@ -201,12 +286,17 @@ app.post("/parties", (req, res) => {
 
 // Add a character to a party
 app.put("/parties/:id/add", (req, res) => {
-  const id = req.params.id
-  const update = req.body.member
-  Party.findByIdAndUpdate(id, 
-    { $push : { "members" : update } }
-  )
+  const partyId = req.params.id
+  const newMemberId = req.body.members
+  
+  Party
+  .findByIdAndUpdate(partyId, 
+    { $push : { "members" : newMemberId } },
+    { "new" : true}
+  )  
   .then(() => {
-    Party.findById(id)
-  }, res.send(id))
+    res.status(201).json({ created: true})})
+  .catch(err => {
+    res.status(400).json({ created: false, errorMsg: err.message })
+  })
 })
