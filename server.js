@@ -142,7 +142,6 @@ app.get("/characters", (req, res) => {
   .populate("party")
   .populate("user")
   .sort({ "name": 1 })
-  // .populate({path: "party", select: "name"})
   .then(characters => {
     res.json(characters)
   })
@@ -202,9 +201,6 @@ app.put("/characters/:id/party", (req, res) => {
 app.put("/characters/:id/spells", (req, res) => {
   const id = req.params.id
   const spell = req.body.spells
-  
-  console.log(id)
-  console.log(spell)
 
   Character
   .findByIdAndUpdate(id, 
@@ -251,6 +247,7 @@ app.get("/parties", (req, res) => {
     Party
     .find()
     .populate({path: "members", select: "name portrait"})
+    .sort({ "name": 1 })
     .then(parties => {
       res.json(parties)
     })
